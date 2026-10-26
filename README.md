@@ -22,7 +22,7 @@ kernel release plus the extra packages from the guide). Kernel sources are
 | `generate_Dockerfile.sh` | Renders the template for a kernel release (required argument) |
 | `image_builder.sh` | Builds `ubuntu_kernel_builder:<ubuntu-release>-<kernel-release>` from a rendered Dockerfile |
 | `build_kernel_in_container.sh` | In-container build logic, baked into the image as `/usr/local/bin/ubuntu-kernel-build.sh` |
-| `kernel_builder.sh` | Runs the build and copies the `.deb` files back to the host |
+| `kernel_builder.sh` | Runs the build (interactive shell first, `-y` to skip) and copies the `.deb` files back to the host |
 
 ## Quick start
 
@@ -39,6 +39,9 @@ kernel release plus the extra packages from the guide). Kernel sources are
 
 # 3b. Or let the container fetch the source with apt source
 ./kernel_builder.sh -k 6.8.0-45-generic
+
+# 3c. Same, but skip the interactive shell and build straight away
+./kernel_builder.sh ~/src/linux -k 6.8.0-45-generic -y
 ```
 
 The image tag combines the Ubuntu release from the Dockerfile's `FROM` line
@@ -48,6 +51,53 @@ Ubuntu releases carry the same kernel release.
 
 The `.deb` files are collected in `./debs/<kernel-release>/` by default
 (`-o/--output` to change it).
+
+## Interactive shell (default)
+
+Unless `-y/--yes` is given (or stdin is not a terminal), `kernel_builder.sh`
+stops in a shell inside the container, in the prepared source tree, before
+anything is built:
+
+* the mounted tree is already chown'ed to `HOST_UID:HOST_GID` (or the source
+  is already fetched in `apt source` mode) and `debian/scripts` are
+  executable, so `fakeroot debian/rules editconfigs` works right away;
+* this is where config, flavour and changelog changes are made (see below);
+* leaving the shell (`exit` / Ctrl-D) runs
+  `fakeroot debian/rules clean && fakeroot debian/rules binary`, i.e. the
+  regular build; `exit 1` aborts without building.
+
+`debian/rules clean` runs *after* the shell, so editing
+`debian.master/rules.d/<arch>.mk` or the changelog there also regenerates
+`debian/control` correctly.
+
+## Changing the config / the kernel name
+
+The `.config` is generated from `debian.master/config/annotations` on every
+build (`debian/scripts/misc/annotations --export`), so a `.config` dropped into
+the source tree is ignored:
+
+* annotate options in `debian.master/config/annotations`, either by appending
+  `CONFIG_FOO policy<{'amd64': 'y'}>` lines (later lines override earlier ones)
+  or with
+  `debian/scripts/misc/annotations --arch amd64 --flavour generic --update <file>`;
+* `fakeroot debian/rules editconfigs` also works but walks every arch/flavour
+  of the `# FLAVOUR:` header and aborts while importing the configs of arches
+  whose cross toolchain is not installed. Trim the header to the arch you
+  build, or use `--update` instead.
+
+The installed name is `<version>-<abi>-<flavour>` (e.g. `7.0.0-34-generic`):
+
+| What | Where |
+| --- | --- |
+| ABI / release | first line of `debian.master/changelog`, e.g. `linux (7.0.0-999.1) resolute; urgency=medium` |
+| flavour | `debian.master/rules.d/amd64.mk` (`flavours = mykernel`), `debian.master/control.d/vars.mykernel` (renamed from `vars.generic`, adjust `arch`/`depends`), `# FLAVOUR: amd64-mykernel` in `debian.master/config/annotations` |
+
+Renaming the source package (`linux (...)`) alone does not rename
+`linux-image-unsigned-*`: those prefixes are hardcoded in
+`debian/rules.d/0-common-vars.mk` and the `control.d` stubs. `CONFIG_LOCALVERSION`
+has no effect either, because `debian/rules` passes `KERNELRELEASE` explicitly
+and the kernel Makefile then takes the `echo $(KERNELRELEASE)` path instead of
+`scripts/setlocalversion`.
 
 ## Choosing the Ubuntu release
 
@@ -86,6 +136,8 @@ e.g. a 6.17 kernel installed on 24.04:
   the layout is the same as with a bind-mounted source directory. Note that
   `apt source` uses the source version currently in the archive, which can be
   newer than the ABI in the requested kernel release.
+* With `-y`/`--yes` (or without a TTY) the build starts immediately; see
+  "Interactive shell" above for the default workflow.
 * With a mounted source tree the container starts as root, changes the owner
   of `/build/linux` (only if some entries do not match) and `/output` to
   `HOST_UID:HOST_GID`, then re-executes the build with `setpriv` as that user.

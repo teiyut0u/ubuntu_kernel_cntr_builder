@@ -18,9 +18,13 @@
 #                      the build is re-executed as this user (default: the
 #                      owner of /build/linux).
 #   BUILD_AS_ROOT      1 to skip the ownership fix and build as root
+#   INTERACTIVE        1 to open a shell in the prepared source tree before
+#                      building.  Leaving the shell starts the build, exiting
+#                      with a non-zero status aborts it.  Ignored when stdin
+#                      is not a terminal.
 #
 # Usage (normally done by kernel_builder.sh on the host):
-#   docker run --rm -v <src>:/build/linux -v <out>:/output \
+#   docker run --rm -it -v <src>:/build/linux -v <out>:/output \
 #       -e SOURCE_MOUNTED=1 -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) \
 #       ubuntu_kernel_builder:<release>-<kernel> ubuntu-kernel-build.sh
 
@@ -89,6 +93,40 @@ cd "$src"
 log "kernel source: $src"
 
 chmod a+x debian/scripts/* debian/scripts/misc/* 2>/dev/null || true
+
+# Optional pause before building: the tree is already usable (owned by the
+# host user in mount mode, sources fetched in apt source mode), so this is
+# where config / flavour / changelog changes are made.  `debian/rules clean`
+# below regenerates debian/control, so changing the flavour here works too.
+if [ "${INTERACTIVE:-0}" = 1 ]; then
+    if [ ! -t 0 ]; then
+        log "INTERACTIVE=1 but stdin is not a terminal; building without a shell"
+    else
+        cat <<EOF
+
+>>> interactive mode -- nothing has been built yet (kernel source: $src)
+
+    config : edit debian.master/config/annotations (recommended), or run
+             fakeroot debian/rules editconfigs
+             note: editconfigs walks *all* arch/flavour entries of the
+             annotations "# FLAVOUR:" header and aborts importing the ones
+             without a cross toolchain; trim that header to the arch you
+             build, or use "annotations --arch ... --flavour ... --update"
+    name   : debian.master/changelog (ABI bump),
+             debian.master/rules.d/<arch>.mk (flavours),
+             debian.master/control.d/vars.<flavour>, annotations "# FLAVOUR:"
+    build  : leave the shell (exit / Ctrl-D) to run
+             'fakeroot debian/rules clean && fakeroot debian/rules binary'
+             'exit 1' aborts without building
+
+EOF
+        if ! bash -i; then
+            printf '\n>>> interactive session aborted, nothing was built\n' >&2
+            exit 1
+        fi
+        log "interactive session finished, starting the build"
+    fi
+fi
 
 log "fakeroot debian/rules clean"
 fakeroot debian/rules clean

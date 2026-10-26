@@ -3,12 +3,16 @@
 # Build an Ubuntu kernel inside the ubuntu_kernel_builder:<ubuntu-release>-<kernel-release> image.
 #
 # Usage:
-#   ./kernel_builder.sh [source-dir] [-k <kernel-release>] [-r <ubuntu-release>] [-o <output-dir>]
+#   ./kernel_builder.sh [source-dir] [-k <kernel-release>] [-r <ubuntu-release>] [-o <output-dir>] [-y]
 #
 # source-dir is optional:
 #   * given   -> bind-mounted read-write at /build/linux
 #   * omitted -> `apt source linux-image-unsigned-<kernel-release>` is run
 #                inside the container
+#
+# By default a shell is opened inside the container before building (in the
+# prepared source tree); leaving it starts the build, 'exit 1' aborts.  Pass
+# -y/--yes to build immediately.
 #
 # The resulting .deb packages are copied to <output-dir>
 # (default: ./debs/<kernel-release>) on the host.
@@ -44,6 +48,12 @@ Options:
   -o, --output DIR          Host directory for the .deb files
                             (default: ./debs/<kernel-release>).
   -j, --jobs N              Parallel build jobs (default: nproc).
+  -y, --yes                 Skip the interactive shell and build immediately
+                            (-y is short for --no-interactive).
+                            Without it a shell is opened inside the container
+                            (in the prepared source tree) before building;
+                            leaving the shell starts the build, 'exit 1'
+                            aborts it. The shell is skipped without a TTY.
       --root                In mount mode, skip the ownership fix and build
                             as root. Default: chown the mounted tree and
                             /output to HOST_UID:HOST_GID, then build as that
@@ -57,6 +67,7 @@ Environment:
 
 Examples:
   ./kernel_builder.sh ~/src/linux -k 6.8.0-45-generic
+  ./kernel_builder.sh ~/src/linux -k 6.8.0-45-generic -y
   ./kernel_builder.sh -k 6.8.0-45-generic -r noble
   ./kernel_builder.sh ~/src/linux -k 7.0.0-14-generic -o /tmp/debs
 EOF
@@ -69,6 +80,7 @@ ubuntu_release=""
 source_dir=""
 output_dir=""
 as_root=0
+interactive=1
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -95,6 +107,10 @@ while [ $# -gt 0 ]; do
             [ $# -ge 2 ] || die "$1 requires an argument"
             jobs=$2
             shift 2
+            ;;
+        -y|--yes|--no-interactive)
+            interactive=0
+            shift
             ;;
         --root)
             as_root=1
@@ -183,12 +199,24 @@ printf 'image      : %s\n' "$image"
 printf 'source     : %s\n' "${source_dir:-apt source linux-image-unsigned-${kernel_release}}"
 printf 'output     : %s\n' "$output_dir"
 printf 'jobs       : %s\n' "$jobs"
+printf 'mode       : %s\n' "$([ "$interactive" = 1 ] && echo 'interactive (shell before build)' || echo batch)"
 printf '\n'
 
+tty_args=()
+if [ "$interactive" = 1 ]; then
+    if [ -t 0 ] && [ -t 1 ]; then
+        tty_args=(-it)
+    else
+        printf 'warning: interactive mode needs a terminal, the shell will be skipped (use -y to skip it explicitly)\n' >&2
+    fi
+fi
+
 "$docker_bin" run --rm \
+    ${tty_args[@]+"${tty_args[@]}"} \
     ${mounts[@]+"${mounts[@]}"} \
     -e "KERNEL_RELEASE=${kernel_release}" \
     -e "SOURCE_MOUNTED=$([ -n "$source_dir" ] && echo 1 || echo 0)" \
+    -e "INTERACTIVE=${interactive}" \
     -e "BUILD_AS_ROOT=${as_root}" \
     -e "HOST_UID=$(id -u)" \
     -e "HOST_GID=$(id -g)" \
