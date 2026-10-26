@@ -41,6 +41,9 @@ kernel release plus the extra packages from the guide). Kernel sources are
 
 # 2c. Same, but skip the interactive shell and build straight away
 ./build_kernel.sh ~/src/linux -k 6.8.0-45-generic -y
+
+# 2d. Build only one of the flavours listed in debian.<kernel>/rules.d/<arch>.mk
+./build_kernel.sh ~/src/linux -k 7.0.0-34-generic -l cxltest
 ```
 
 The image tag combines the Ubuntu release and the kernel release from the
@@ -69,6 +72,29 @@ anything is built:
 `debian/rules clean` runs *after* the shell, so editing
 `debian.master/rules.d/<arch>.mk` or the changelog there also regenerates
 `debian/control` correctly.
+
+## Selecting the flavour(s) to build
+
+By default every flavour listed in `debian.<kernel>/rules.d/<arch>.mk`
+(`flavours = ...`) is built, which can be slow when the tree carries several
+(e.g. `generic` and a custom one). `-l/--flavours` overrides that list for a
+single build without touching the source tree:
+
+```bash
+./build_kernel.sh ~/src/linux -k 7.0.0-34-generic -l cxltest
+./build_kernel.sh ~/src/linux -k 7.0.0-34-generic -l "generic cxltest"   # or generic,cxltest
+```
+
+It is forwarded to the container as `BUILD_FLAVOURS` and applied as
+`fakeroot debian/rules binary flavours=<list>`. Make command line variables win
+over the ones assigned in the makefiles, so this is equivalent to temporarily
+editing `flavours` in `rules.d/<arch>.mk` (which is the alternative if the image
+predates this option). Note that environment variables can *not* be used for
+this -- a `flavours = ...` assignment in the makefile overrides them.
+
+Only the listed flavours are compiled and packaged; the packages declared in
+`debian/control` for the other flavours simply are not built (all `dh_*` calls
+are scoped with `-p<package>`, so this is fine for `debian/rules binary`).
 
 ## Changing the config / the kernel name
 
@@ -138,6 +164,10 @@ e.g. a 6.17 kernel installed on 24.04:
   newer than the ABI in the requested kernel release.
 * With `-y`/`--yes` (or without a TTY) the build starts immediately; see
   "Interactive shell" above for the default workflow.
+* `-l/--flavours` (see "Selecting the flavour(s) to build") requires an image
+  built from this version of `build_kernel_in_container.sh`, since that is where
+  `BUILD_FLAVOURS` is turned into the `flavours=` make argument -- re-run
+  `build_image.sh` once after updating this directory.
 * With a mounted source tree the container starts as root, changes the owner
   of `/build/linux` (only if some entries do not match) and `/output` to
   `HOST_UID:HOST_GID`, then re-executes the build with `setpriv` as that user.

@@ -3,7 +3,7 @@
 # Build an Ubuntu kernel inside the ubuntu_kernel_builder:<ubuntu-release>-<kernel-release> image.
 #
 # Usage:
-#   ./build_kernel.sh [source-dir] [-k <kernel-release>] [-r <ubuntu-release>] [-o <output-dir>] [-y]
+#   ./build_kernel.sh [source-dir] [-k <kernel-release>] [-r <ubuntu-release>] [-o <output-dir>] [-l <flavours>] [-y]
 #
 # source-dir is optional:
 #   * given   -> bind-mounted read-write at /build/linux
@@ -48,6 +48,11 @@ Options:
   -o, --output DIR          Host directory for the .deb files
                             (default: ./debs/<kernel-release>).
   -j, --jobs N              Parallel build jobs (default: nproc).
+  -l, --flavours LIST       Only build these flavour(s), overriding the
+                            `flavours` variable from debian.<kernel>/rules.d/
+                            <arch>.mk, e.g. -l cxltest or -l "generic cxltest"
+                            (commas work too). Default: whatever
+                            debian/rules lists (i.e. build every flavour).
   -y, --yes                 Skip the interactive shell and build immediately
                             (-y is short for --no-interactive).
                             Without it a shell is opened inside the container
@@ -64,11 +69,13 @@ Environment:
   DOCKER                    Container engine to use (default: docker).
   KERNEL_RELEASE            Default for --kernel-release.
   JOBS                      Default for --jobs.
+  FLAVOURS                  Default for --flavours.
 
 Examples:
   ./build_kernel.sh ~/src/linux -k 6.8.0-45-generic
   ./build_kernel.sh ~/src/linux -k 6.8.0-45-generic -y
   ./build_kernel.sh -k 6.8.0-45-generic -r noble
+  ./build_kernel.sh ~/src/linux -k 7.0.0-34-generic -l cxltest
   ./build_kernel.sh ~/src/linux -k 7.0.0-14-generic -o /tmp/debs
 EOF
 }
@@ -79,6 +86,7 @@ jobs=${JOBS:-$(nproc)}
 ubuntu_release=""
 source_dir=""
 output_dir=""
+flavours_arg=${FLAVOURS:-}
 as_root=0
 interactive=1
 
@@ -106,6 +114,11 @@ while [ $# -gt 0 ]; do
         -j|--jobs)
             [ $# -ge 2 ] || die "$1 requires an argument"
             jobs=$2
+            shift 2
+            ;;
+        -l|--flavours)
+            [ $# -ge 2 ] || die "$1 requires an argument"
+            flavours_arg=$2
             shift 2
             ;;
         -y|--yes|--no-interactive)
@@ -145,6 +158,18 @@ if [ -n "$ubuntu_release" ] && ! [[ "$ubuntu_release" =~ ^[A-Za-z0-9][A-Za-z0-9.
 fi
 if ! [[ "$jobs" =~ ^[1-9][0-9]*$ ]]; then
     die "invalid job count: '$jobs'"
+fi
+
+if [ -n "$flavours_arg" ]; then
+    # Accept "a b", "a,b" and "a, b"; debian/rules wants a space separated list.
+    flavours_normalised=""
+    for flavour in ${flavours_arg//,/ }; do
+        if ! [[ "$flavour" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+            die "invalid flavour: '$flavour'"
+        fi
+        flavours_normalised+="${flavours_normalised:+ }$flavour"
+    done
+    flavours_arg=$flavours_normalised
 fi
 
 if [ -n "$source_dir" ]; then
@@ -195,10 +220,16 @@ if [ -n "$source_dir" ]; then
     mounts+=(-v "${source_dir}:/build/linux")
 fi
 
+flavours_env=()
+if [ -n "$flavours_arg" ]; then
+    flavours_env=(-e "BUILD_FLAVOURS=${flavours_arg}")
+fi
+
 printf 'image      : %s\n' "$image"
 printf 'source     : %s\n' "${source_dir:-apt source linux-image-unsigned-${kernel_release}}"
 printf 'output     : %s\n' "$output_dir"
 printf 'jobs       : %s\n' "$jobs"
+printf 'flavours   : %s\n' "${flavours_arg:-<all listed in debian/rules>}"
 printf 'mode       : %s\n' "$([ "$interactive" = 1 ] && echo 'interactive (shell before build)' || echo batch)"
 printf '\n'
 
@@ -217,6 +248,7 @@ fi
     -e "KERNEL_RELEASE=${kernel_release}" \
     -e "SOURCE_MOUNTED=$([ -n "$source_dir" ] && echo 1 || echo 0)" \
     -e "INTERACTIVE=${interactive}" \
+    ${flavours_env[@]+"${flavours_env[@]}"} \
     -e "BUILD_AS_ROOT=${as_root}" \
     -e "HOST_UID=$(id -u)" \
     -e "HOST_GID=$(id -g)" \

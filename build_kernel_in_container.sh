@@ -14,6 +14,9 @@
 #   SOURCE_MOUNTED     1 if a source tree is bind-mounted at /build/linux
 #   CONCURRENCY_LEVEL  parallel build jobs (passed to debian/rules)
 #   DEB_BUILD_OPTIONS  should contain parallel=<jobs>
+#   BUILD_FLAVOURS     optional space separated flavour list; when set it is
+#                      passed to debian/rules as `flavours=...`, overriding the
+#                      `flavours` variable from debian.<kernel>/rules.d/<arch>.mk
 #   HOST_UID/HOST_GID  owner for the mounted tree and /output. In mount mode
 #                      the build is re-executed as this user (default: the
 #                      owner of /build/linux).
@@ -115,6 +118,7 @@ if [ "${INTERACTIVE:-0}" = 1 ]; then
     name   : debian.master/changelog (ABI bump),
              debian.master/rules.d/<arch>.mk (flavours),
              debian.master/control.d/vars.<flavour>, annotations "# FLAVOUR:"
+             (pass -l/--flavours to build_kernel.sh to build only some of them)
     build  : leave the shell (exit / Ctrl-D) to run
              'fakeroot debian/rules clean && fakeroot debian/rules binary'
              'exit 1' aborts without building
@@ -131,8 +135,17 @@ fi
 log "fakeroot debian/rules clean"
 fakeroot debian/rules clean
 
-log "fakeroot debian/rules binary (CONCURRENCY_LEVEL=${CONCURRENCY_LEVEL:-1})"
-fakeroot debian/rules binary
+# BUILD_FLAVOURS (set by build_kernel.sh -l/--flavours) overrides the `flavours`
+# variable from debian.<kernel>/rules.d/<arch>.mk; make command line variables
+# win over the ones assigned in the makefiles. A list with spaces is kept as a
+# single (quoted) argument, which make accepts as one variable assignment.
+flavour_args=()
+if [ -n "${BUILD_FLAVOURS:-}" ]; then
+    flavour_args+=("flavours=${BUILD_FLAVOURS}")
+fi
+
+log "fakeroot debian/rules binary ${flavour_args[*]:-(default flavours)} (CONCURRENCY_LEVEL=${CONCURRENCY_LEVEL:-1})"
+fakeroot debian/rules binary ${flavour_args[@]+"${flavour_args[@]}"}
 
 # Ubuntu writes the .deb files one level above the source tree.  In both
 # modes that directory is /build: container-internal, mode 1777, so the build
