@@ -23,7 +23,7 @@
 #                      with a non-zero status aborts it.  Ignored when stdin
 #                      is not a terminal.
 #
-# Usage (normally done by kernel_builder.sh on the host):
+# Usage (normally done by build_kernel.sh on the host):
 #   docker run --rm -it -v <src>:/build/linux -v <out>:/output \
 #       -e SOURCE_MOUNTED=1 -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) \
 #       ubuntu_kernel_builder:<release>-<kernel> ubuntu-kernel-build.sh

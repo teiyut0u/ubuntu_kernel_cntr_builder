@@ -1,24 +1,31 @@
 #!/usr/bin/env bash
 #
-# Render Dockerfile.template for a given Ubuntu kernel release.
+# Render Dockerfile.template for a given Ubuntu kernel release and build the
+# matching build image (skip the build with --no-build).
 #
 # Usage:
-#   ./generate_Dockerfile.sh <kernel-release> [-r <ubuntu-release>] [-o <file>]
+#   ./build_image.sh <kernel-release> [-r <ubuntu-release>] [-o <Dockerfile>]
+#                    [--no-build] [-- <docker build options...>]
 #
 # <kernel-release> is mandatory and is substituted for __KERNEL_RELEASE__ in
 # the template (it is the value `uname -r` prints on the target machine).
+#
+# The image tag is derived from the arguments, not re-parsed from the rendered
+# Dockerfile: ubuntu_kernel_builder:<ubuntu-release>-<kernel-release>.
 
 set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 template="${script_dir}/Dockerfile.template"
+docker_bin=${DOCKER:-docker}
 
 usage() {
     cat <<'EOF'
-Usage: generate_Dockerfile.sh <kernel-release> [options]
+Usage: build_image.sh <kernel-release> [options] [-- docker build ...]
 
-Render Dockerfile.template for one Ubuntu kernel release. The kernel source is
-not downloaded; the resulting image only contains the build environment.
+Render Dockerfile.template for one Ubuntu kernel release and build
+ubuntu_kernel_builder:<ubuntu-release>-<kernel-release>. The kernel source is
+not downloaded; the image only contains the build environment.
 
 Arguments:
   <kernel-release>          Required. e.g. 6.8.0-45-generic, 7.0.0-14-generic
@@ -27,12 +34,20 @@ Options:
   -r, --ubuntu-release REL  Ubuntu release or codename whose archive carries
                             that kernel (e.g. noble, 24.04, resolute).
                             Default: inferred from the kernel version.
-  -o, --output FILE         Output file (default: ./Dockerfile).
+  -o, --output DOCKERFILE   Path of the Dockerfile to write
+                            (default: ./Dockerfile). Its directory is used as
+                            the docker build context.
+      --no-build            Only render the Dockerfile.
   -h, --help                Show this help and exit.
 
+Environment:
+  DOCKER                    Container engine to use (default: docker).
+
 Examples:
-  ./generate_Dockerfile.sh 6.8.0-45-generic
-  ./generate_Dockerfile.sh 7.0.0-14-generic -r resolute -o Dockerfile.resolute
+  ./build_image.sh 6.8.0-45-generic
+  ./build_image.sh 6.8.0-45-generic -- --pull
+  ./build_image.sh 7.0.0-14-generic -r resolute -o Dockerfile.resolute
+  ./build_image.sh 7.0.0-14-generic --no-build
 EOF
 }
 
@@ -61,7 +76,10 @@ ubuntu_release_for_kernel() {
 
 kernel_release=""
 ubuntu_release=""
-output="./Dockerfile"
+dockerfile="./Dockerfile"
+no_build=0
+passthrough=0
+extra_args=()
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -76,11 +94,16 @@ while [ $# -gt 0 ]; do
             ;;
         -o|--output)
             [ $# -ge 2 ] || die "$1 requires one argument"
-            output=$2
+            dockerfile=$2
             shift 2
+            ;;
+        --no-build)
+            no_build=1
+            shift
             ;;
         --)
             shift
+            passthrough=1
             break
             ;;
         -*)
@@ -98,7 +121,12 @@ done
     usage >&2
     die "the target kernel release is required"
 }
-[ $# -eq 0 ] || die "unexpected extra argument: $1"
+# Everything after `--` is forwarded to `docker build`.
+if [ "$passthrough" = 1 ]; then
+    extra_args=("$@")
+else
+    [ $# -eq 0 ] || die "unexpected extra argument: $1 (put docker build options after --)"
+fi
 
 # Keep the value safe for sed and for use inside the Dockerfile.
 if ! [[ "$kernel_release" =~ ^[0-9][A-Za-z0-9.+~_-]*$ ]]; then
@@ -119,12 +147,12 @@ if ! [[ "$ubuntu_release" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
     die "invalid Ubuntu release: '$ubuntu_release'"
 fi
 
-output_dir=$(dirname -- "$output")
-mkdir -p -- "$output_dir"
-output_dir=$(cd -- "$output_dir" && pwd)
-output="${output_dir}/$(basename -- "$output")"
+dockerfile_dir=$(dirname -- "$dockerfile")
+mkdir -p -- "$dockerfile_dir"
+dockerfile_dir=$(cd -- "$dockerfile_dir" && pwd)
+dockerfile="${dockerfile_dir}/$(basename -- "$dockerfile")"
 
-tmp=$(mktemp "${output}.XXXXXX")
+tmp=$(mktemp "${dockerfile}.XXXXXX")
 trap 'rm -f -- "$tmp"' EXIT
 
 sed -e "s|__KERNEL_RELEASE__|${kernel_release}|g" \
@@ -132,14 +160,50 @@ sed -e "s|__KERNEL_RELEASE__|${kernel_release}|g" \
     "$template" >"$tmp"
 
 if grep -q '__[A-Z_]*__' "$tmp"; then
-    die "unsubstituted placeholder left in output: $(grep -o '__[A-Z_]*__' "$tmp" | sort -u | tr '\n' ' ')"
+    die "unsubstituted placeholder left in the rendered Dockerfile: $(grep -o '__[A-Z_]*__' "$tmp" | sort -u | tr '\n' ' ')"
 fi
 
 chmod 0644 "$tmp"
-mv -f -- "$tmp" "$output"
+mv -f -- "$tmp" "$dockerfile"
 trap - EXIT
 
-printf 'wrote %s\n' "$output"
+printf 'wrote %s\n' "$dockerfile"
 printf '  kernel release : %s\n' "$kernel_release"
 printf '  ubuntu release : %s\n' "$ubuntu_release"
 printf '  image tag      : ubuntu_kernel_builder:%s-%s\n' "$ubuntu_release" "$kernel_release"
+
+if [ "$no_build" = 1 ]; then
+    exit 0
+fi
+
+command -v "$docker_bin" >/dev/null 2>&1 ||
+    die "container engine not found: $docker_bin (set DOCKER=... to override)"
+
+image_tag="${ubuntu_release}-${kernel_release}"
+if [ ${#image_tag} -gt 128 ]; then
+    die "image tag is longer than 128 characters: $image_tag"
+fi
+image="ubuntu_kernel_builder:${image_tag}"
+context="$dockerfile_dir"
+
+# Dockerfile.template copies build_kernel_in_container.sh into the image.  It
+# must be in the build context; stage a copy when the Dockerfile is rendered
+# somewhere else and remove it again afterwards.
+helper=build_kernel_in_container.sh
+staged_helper=""
+cleanup() { [ -z "$staged_helper" ] || rm -f -- "$staged_helper"; }
+trap cleanup EXIT
+
+if [ ! -f "$context/$helper" ]; then
+    [ -f "$script_dir/$helper" ] || die "build script not found: $script_dir/$helper"
+    cp -- "$script_dir/$helper" "$context/$helper"
+    staged_helper="$context/$helper"
+    printf 'staged     : %s\n' "$staged_helper"
+fi
+
+printf '\nbuilding %s\n' "$image"
+# Forward any extra options after the fixed ones.
+"$docker_bin" build -t "$image" -f "$dockerfile" \
+    ${extra_args[@]+"${extra_args[@]}"} "$context"
+
+printf '\nbuilt %s\n' "$image"

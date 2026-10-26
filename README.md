@@ -7,11 +7,11 @@ The image only provides the build environment (`apt build-dep` for the target
 kernel release plus the extra packages from the guide). Kernel sources are
 **not** downloaded at image build time:
 
-* `kernel_builder.sh <src-dir>` bind-mounts an existing source tree at
+* `build_kernel.sh <src-dir>` bind-mounts an existing source tree at
   `/build/linux`. `<src-dir>` must be the extracted tree itself (e.g.
   `.../linux-7.0.0`, the directory containing `debian/`), not the directory
   that holds the `.dsc`/tarballs.
-* `kernel_builder.sh` without a source directory runs
+* `build_kernel.sh` without a source directory runs
   `apt source linux-image-unsigned-<kernel-release>` inside the container.
 
 ## Files
@@ -19,33 +19,33 @@ kernel release plus the extra packages from the guide). Kernel sources are
 | File | Purpose |
 | --- | --- |
 | `Dockerfile.template` | Image template with `__KERNEL_RELEASE__` / `__UBUNTU_RELEASE__` placeholders |
-| `generate_Dockerfile.sh` | Renders the template for a kernel release (required argument) |
-| `image_builder.sh` | Builds `ubuntu_kernel_builder:<ubuntu-release>-<kernel-release>` from a rendered Dockerfile |
+| `build_image.sh` | Renders the template for a kernel release and builds `ubuntu_kernel_builder:<ubuntu-release>-<kernel-release>` (`--no-build` to only render) |
+| `build_kernel.sh` | Runs the build (interactive shell first, `-y` to skip) and copies the `.deb` files back to the host |
 | `build_kernel_in_container.sh` | In-container build logic, baked into the image as `/usr/local/bin/ubuntu-kernel-build.sh` |
-| `kernel_builder.sh` | Runs the build (interactive shell first, `-y` to skip) and copies the `.deb` files back to the host |
 
 ## Quick start
 
 ```bash
-# 1. Render a Dockerfile for the target kernel (e.g. the server's `uname -r`)
-./generate_Dockerfile.sh 6.8.0-45-generic
+# 1. Render ./Dockerfile and build the image in one go
+#    -> ubuntu_kernel_builder:noble-6.8.0-45-generic
+./build_image.sh 6.8.0-45-generic
 
-# 2. Build the image -> ubuntu_kernel_builder:noble-6.8.0-45-generic
-./image_builder.sh                  # uses ./Dockerfile
-# or: ./image_builder.sh path/to/Dockerfile
+# ... or only render it, e.g. to inspect it first
+./build_image.sh 6.8.0-45-generic --no-build
 
-# 3a. Build an existing source tree (mounted at /build/linux)
-./kernel_builder.sh ~/src/linux -k 6.8.0-45-generic
+# 2a. Build an existing source tree (mounted at /build/linux)
+./build_kernel.sh ~/src/linux -k 6.8.0-45-generic
 
-# 3b. Or let the container fetch the source with apt source
-./kernel_builder.sh -k 6.8.0-45-generic
+# 2b. Or let the container fetch the source with apt source
+./build_kernel.sh -k 6.8.0-45-generic
 
-# 3c. Same, but skip the interactive shell and build straight away
-./kernel_builder.sh ~/src/linux -k 6.8.0-45-generic -y
+# 2c. Same, but skip the interactive shell and build straight away
+./build_kernel.sh ~/src/linux -k 6.8.0-45-generic -y
 ```
 
-The image tag combines the Ubuntu release from the Dockerfile's `FROM` line
-and the kernel release from `ARG KERNEL_RELEASE=...`. `kernel_builder.sh`
+The image tag combines the Ubuntu release and the kernel release from the
+`build_image.sh` arguments:
+`ubuntu_kernel_builder:<ubuntu-release>-<kernel-release>`. `build_kernel.sh`
 looks up the matching local image automatically; pass `-r noble` if several
 Ubuntu releases carry the same kernel release.
 
@@ -54,7 +54,7 @@ The `.deb` files are collected in `./debs/<kernel-release>/` by default
 
 ## Interactive shell (default)
 
-Unless `-y/--yes` is given (or stdin is not a terminal), `kernel_builder.sh`
+Unless `-y/--yes` is given (or stdin is not a terminal), `build_kernel.sh`
 stops in a shell inside the container, in the prepared source tree, before
 anything is built:
 
@@ -101,7 +101,7 @@ and the kernel Makefile then takes the `echo $(KERNELRELEASE)` path instead of
 
 ## Choosing the Ubuntu release
 
-`generate_Dockerfile.sh` infers the base image from the kernel version:
+`build_image.sh` infers the base image from the kernel version:
 
 | Kernel | Ubuntu |
 | --- | --- |
@@ -115,7 +115,7 @@ For HWE kernels or anything not in the table, pass the archive explicitly,
 e.g. a 6.17 kernel installed on 24.04:
 
 ```bash
-./generate_Dockerfile.sh 6.17.0-14-generic -r noble   # -> ubuntu_kernel_builder:noble-6.17.0-14-generic
+./build_image.sh 6.17.0-14-generic -r noble   # -> ubuntu_kernel_builder:noble-6.17.0-14-generic
 ```
 
 ## Notes
@@ -126,11 +126,11 @@ e.g. a 6.17 kernel installed on 24.04:
   by the kernel's own `Build-Depends`.
 * The in-container steps live in `build_kernel_in_container.sh` and are
   `COPY`ed into the image as `/usr/local/bin/ubuntu-kernel-build.sh`, so
-  `kernel_builder.sh` only passes mounts and environment variables. Changing
-  that script requires rebuilding the image (the apt layers stay cached). If
-  the Dockerfile was rendered outside this directory, `image_builder.sh`
-  stages a copy of the script into the build context for the build and removes
-  it afterwards.
+  `build_kernel.sh` only passes mounts and environment variables. Changing
+  that script requires re-running `build_image.sh` (the apt layers
+  stay cached). If the Dockerfile is rendered outside this directory, a copy
+  of the script is staged into the build context for the build and removed
+  afterwards.
 * In `apt source` mode the container unpacks the tree into `/build`
   (`/build/linux-<version>`) and creates a symlink `/build/linux` to it, so
   the layout is the same as with a bind-mounted source directory. Note that
@@ -156,5 +156,6 @@ e.g. a 6.17 kernel installed on 24.04:
   `linux (6.8.0-999.48) noble; urgency=medium`.
 * `CONCURRENCY_LEVEL` / `DEB_BUILD_OPTIONS=parallel=N` are set from `-j`
   (default: `nproc`).
-* Extra options for `docker build` can be appended to `image_builder.sh`;
-  set `DOCKER=podman` to use another engine.
+* Extra options for `docker build` can be passed to `build_image.sh`
+  after `--` (e.g. `-- --pull --progress=plain`); set `DOCKER=podman` to use
+  another engine.

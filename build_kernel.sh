@@ -3,7 +3,7 @@
 # Build an Ubuntu kernel inside the ubuntu_kernel_builder:<ubuntu-release>-<kernel-release> image.
 #
 # Usage:
-#   ./kernel_builder.sh [source-dir] [-k <kernel-release>] [-r <ubuntu-release>] [-o <output-dir>] [-y]
+#   ./build_kernel.sh [source-dir] [-k <kernel-release>] [-r <ubuntu-release>] [-o <output-dir>] [-y]
 #
 # source-dir is optional:
 #   * given   -> bind-mounted read-write at /build/linux
@@ -26,7 +26,7 @@ die() {
 
 usage() {
     cat <<'EOF'
-Usage: kernel_builder.sh [source-dir] [options]
+Usage: build_kernel.sh [source-dir] [options]
 
 Build an Ubuntu kernel with fakeroot debian/rules binary inside the
 ubuntu_kernel_builder:<ubuntu-release>-<kernel-release> image and copy the
@@ -42,7 +42,7 @@ Arguments:
 Options:
   -k, --kernel-release KR   Kernel release (default: uname -r).
   -r, --ubuntu-release REL  Ubuntu release part of the image tag, as passed
-                            to generate_Dockerfile.sh -r (e.g. noble, 24.04).
+                            to build_image.sh -r (e.g. noble, 24.04).
                             Default: auto-detect from local images matching
                             the kernel release.
   -o, --output DIR          Host directory for the .deb files
@@ -66,10 +66,10 @@ Environment:
   JOBS                      Default for --jobs.
 
 Examples:
-  ./kernel_builder.sh ~/src/linux -k 6.8.0-45-generic
-  ./kernel_builder.sh ~/src/linux -k 6.8.0-45-generic -y
-  ./kernel_builder.sh -k 6.8.0-45-generic -r noble
-  ./kernel_builder.sh ~/src/linux -k 7.0.0-14-generic -o /tmp/debs
+  ./build_kernel.sh ~/src/linux -k 6.8.0-45-generic
+  ./build_kernel.sh ~/src/linux -k 6.8.0-45-generic -y
+  ./build_kernel.sh -k 6.8.0-45-generic -r noble
+  ./build_kernel.sh ~/src/linux -k 7.0.0-14-generic -o /tmp/debs
 EOF
 }
 
@@ -158,7 +158,7 @@ command -v "$docker_bin" >/dev/null 2>&1 ||
 if [ -n "$ubuntu_release" ]; then
     image="ubuntu_kernel_builder:${ubuntu_release}-${kernel_release}"
     if ! "$docker_bin" image inspect "$image" >/dev/null 2>&1; then
-        die "image not found: $image (build it with ./generate_Dockerfile.sh $kernel_release -r $ubuntu_release && ./image_builder.sh)"
+        die "image not found: $image (build it with ./build_image.sh $kernel_release -r $ubuntu_release)"
     fi
 else
     # No -r given: look for a local image whose tag is
@@ -174,7 +174,7 @@ else
     done < <("$docker_bin" image ls ubuntu_kernel_builder --format '{{.Tag}}' 2>/dev/null || true)
 
     if [ ${#matches[@]} -eq 0 ]; then
-        die "no local image matches kernel release $kernel_release; build it first, e.g. ./generate_Dockerfile.sh $kernel_release -r <ubuntu-release> && ./image_builder.sh"
+        die "no local image matches kernel release $kernel_release; build it first, e.g. ./build_image.sh $kernel_release -r <ubuntu-release>"
     fi
     if [ ${#matches[@]} -gt 1 ]; then
         printf 'multiple images match kernel release %s:\n' "$kernel_release" >&2

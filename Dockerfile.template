@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 #
 # Template for an Ubuntu kernel build environment.
-# Render it with generate_Dockerfile.sh, which substitutes:
+# Render it with build_image.sh, which substitutes:
 #
 #   __KERNEL_RELEASE__  target kernel release, e.g. 6.8.0-45-generic
 #                       (the value of `uname -r` on the target machine)
@@ -12,7 +12,7 @@
 # https://ubuntu.com/kernel/docs/how-to/develop-customise/build-kernel/
 #
 # The kernel source is NOT downloaded here. It is either mounted at
-# /build/linux or fetched with `apt source` by kernel_builder.sh.
+# /build/linux or fetched with `apt source` by build_kernel.sh.
 
 FROM ubuntu:__UBUNTU_RELEASE__
 
