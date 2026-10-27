@@ -3,16 +3,16 @@
 # Build an Ubuntu kernel inside the ubuntu_kernel_builder:<ubuntu-release>-<kernel-release> image.
 #
 # Usage:
-#   ./build_kernel.sh [source-dir] [-k <kernel-release>] [-r <ubuntu-release>] [-o <output-dir>] [-l <flavours>] [-y]
+#   ./build_kernel.sh [source-dir] [-k <kernel-release>] [-r <ubuntu-release>] [-o <output-dir>] [-l <flavours>] [-i]
 #
 # source-dir is optional:
 #   * given   -> bind-mounted read-write at /build/linux
 #   * omitted -> `apt source linux-image-unsigned-<kernel-release>` is run
 #                inside the container
 #
-# By default a shell is opened inside the container before building (in the
-# prepared source tree); leaving it starts the build, 'exit 1' aborts.  Pass
-# -y/--yes to build immediately.
+# By default the build starts immediately.  Pass -i/--interactive to get a
+# shell inside the container first (in the prepared source tree); leaving it
+# starts the build, 'exit 1' aborts.
 #
 # The resulting .deb packages are copied to <output-dir>
 # (default: ./debs/<kernel-release>) on the host.
@@ -53,12 +53,11 @@ Options:
                             <arch>.mk, e.g. -l cxltest or -l "generic cxltest"
                             (commas work too). Default: whatever
                             debian/rules lists (i.e. build every flavour).
-  -y, --yes                 Skip the interactive shell and build immediately
-                            (-y is short for --no-interactive).
-                            Without it a shell is opened inside the container
-                            (in the prepared source tree) before building;
-                            leaving the shell starts the build, 'exit 1'
-                            aborts it. The shell is skipped without a TTY.
+  -i, --interactive         Open a shell inside the container before building
+                            (in the prepared source tree); leaving the shell
+                            starts the build, 'exit 1' aborts it. Requires a
+                            terminal. Without this option the build runs
+                            immediately.
       --root                In mount mode, skip the ownership fix and build
                             as root. Default: chown the mounted tree and
                             /output to HOST_UID:HOST_GID, then build as that
@@ -73,7 +72,7 @@ Environment:
 
 Examples:
   ./build_kernel.sh ~/src/linux -k 6.8.0-45-generic
-  ./build_kernel.sh ~/src/linux -k 6.8.0-45-generic -y
+  ./build_kernel.sh ~/src/linux -k 6.8.0-45-generic -i
   ./build_kernel.sh -k 6.8.0-45-generic -r noble
   ./build_kernel.sh ~/src/linux -k 7.0.0-34-generic -l cxltest
   ./build_kernel.sh ~/src/linux -k 7.0.0-14-generic -o /tmp/debs
@@ -88,7 +87,7 @@ source_dir=""
 output_dir=""
 flavours_arg=${FLAVOURS:-}
 as_root=0
-interactive=1
+interactive=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -121,8 +120,8 @@ while [ $# -gt 0 ]; do
             flavours_arg=$2
             shift 2
             ;;
-        -y|--yes|--no-interactive)
-            interactive=0
+        -i|--interactive)
+            interactive=1
             shift
             ;;
         --root)
@@ -238,7 +237,7 @@ if [ "$interactive" = 1 ]; then
     if [ -t 0 ] && [ -t 1 ]; then
         tty_args=(-it)
     else
-        printf 'warning: interactive mode needs a terminal, the shell will be skipped (use -y to skip it explicitly)\n' >&2
+        die "interactive mode (-i/--interactive) needs a terminal (stdin and stdout must be a TTY)"
     fi
 fi
 

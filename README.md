@@ -20,7 +20,7 @@ kernel release plus the extra packages from the guide). Kernel sources are
 | --- | --- |
 | `Dockerfile.template` | Image template with `__KERNEL_RELEASE__` / `__UBUNTU_RELEASE__` placeholders |
 | `build_image.sh` | Renders the template for a kernel release and builds `ubuntu_kernel_builder:<ubuntu-release>-<kernel-release>` (`--no-build` to only render) |
-| `build_kernel.sh` | Runs the build (interactive shell first, `-y` to skip) and copies the `.deb` files back to the host |
+| `build_kernel.sh` | Runs the build (`-i` for an interactive shell first) and copies the `.deb` files back to the host |
 | `build_kernel_in_container.sh` | In-container build logic, baked into the image as `/usr/local/bin/ubuntu-kernel-build.sh` |
 
 ## Quick start
@@ -39,8 +39,8 @@ kernel release plus the extra packages from the guide). Kernel sources are
 # 2b. Or let the container fetch the source with apt source
 ./build_kernel.sh -k 6.8.0-45-generic
 
-# 2c. Same, but skip the interactive shell and build straight away
-./build_kernel.sh ~/src/linux -k 6.8.0-45-generic -y
+# 2c. Same, but stop in a shell inside the container first
+./build_kernel.sh ~/src/linux -k 6.8.0-45-generic -i
 
 # 2d. Build only one of the flavours listed in debian.<kernel>/rules.d/<arch>.mk
 ./build_kernel.sh ~/src/linux -k 7.0.0-34-generic -l cxltest
@@ -55,11 +55,11 @@ Ubuntu releases carry the same kernel release.
 The `.deb` files are collected in `./debs/<kernel-release>/` by default
 (`-o/--output` to change it).
 
-## Interactive shell (default)
+## Interactive shell (`-i`)
 
-Unless `-y/--yes` is given (or stdin is not a terminal), `build_kernel.sh`
-stops in a shell inside the container, in the prepared source tree, before
-anything is built:
+By default `build_kernel.sh` builds straight away. With `-i/--interactive`
+(and a terminal) it stops in a shell inside the container, in the prepared
+source tree, before anything is built:
 
 * the mounted tree is already chown'ed to `HOST_UID:HOST_GID` (or the source
   is already fetched in `apt source` mode) and `debian/scripts` are
@@ -68,6 +68,9 @@ anything is built:
 * leaving the shell (`exit` / Ctrl-D) runs
   `fakeroot debian/rules clean && fakeroot debian/rules binary`, i.e. the
   regular build; `exit 1` aborts without building.
+
+`-i` without a TTY (e.g. stdin redirected) is an error rather than a silently
+skipped shell.
 
 `debian/rules clean` runs *after* the shell, so editing
 `debian.master/rules.d/<arch>.mk` or the changelog there also regenerates
@@ -162,8 +165,8 @@ e.g. a 6.17 kernel installed on 24.04:
   the layout is the same as with a bind-mounted source directory. Note that
   `apt source` uses the source version currently in the archive, which can be
   newer than the ABI in the requested kernel release.
-* With `-y`/`--yes` (or without a TTY) the build starts immediately; see
-  "Interactive shell" above for the default workflow.
+* Without `-i`/`--interactive` the build starts immediately; see "Interactive
+  shell" above for the shell workflow.
 * `-l/--flavours` (see "Selecting the flavour(s) to build") requires an image
   built from this version of `build_kernel_in_container.sh`, since that is where
   `BUILD_FLAVOURS` is turned into the `flavours=` make argument -- re-run
